@@ -228,17 +228,27 @@ docker compose pull
 docker compose up -d
 ```
 
-To automate it, add [Watchtower](https://github.com/containrrr/watchtower):
+To automate it, add [Watchtower](https://github.com/nicholas-fedor/watchtower):
 
 ```yaml
   watchtower:
-    image: containrrr/watchtower:latest
+    image: nickfedor/watchtower:latest
     container_name: watchtower
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     command: --cleanup --schedule "0 0 5 * * *" tor-middle-relay
 ```
+
+Note: this is the actively maintained fork. The original `containrrr/watchtower`
+was archived in December 2025 and its pinned Docker API client is rejected by
+current Docker engines, so it no longer works. The fork is a drop-in
+replacement — same flags, same labels, only the image name changes.
+
+Mounting the Docker socket gives that container full control over your Docker
+daemon, which is effectively root on the host. If you'd rather not, a cron job
+running `docker compose pull && docker compose up -d` does the same job with
+less exposure.
 
 Recreating the container is safe — the relay's identity keys live on the
 `tor-data` volume, so the fingerprint and accumulated reputation survive the
