@@ -1,52 +1,38 @@
 ## ============================================================
-## Tor Middle-Relay Konfiguration (Template)
-## Wird von entrypoint.sh per envsubst nach /etc/tor/torrc gerendert.
-## Platzhalter ${...} werden zur Laufzeit aus ENV-Variablen gefuellt.
+## Tor middle relay configuration (template)
+## Rendered to /etc/tor/torrc by entrypoint.sh via envsubst.
 ## ============================================================
 
-## --- Identitaet -------------------------------------------------
+## --- Identity ---------------------------------------------------
 Nickname ${NICKNAME}
 ContactInfo ${CONTACT_INFO}
 
-## --- Betriebsart: reiner Middle-Relay -----------------------------
-## Kein lokaler SOCKS-Proxy fuer Clients auf diesem Host
+## --- Pure middle relay --------------------------------------------
+## No local SOCKS proxy for clients on this host
 SocksPort 0
 
-## Explizit KEIN Exit-Relay: kein Traffic verlaesst hier das Tor-Netzwerk
+## No exit traffic ever leaves the Tor network through this node
 ExitRelay 0
 ExitPolicy reject *:*
 IPv6Exit 0
 
-## Explizit KEINE Bridge: Relay wird oeffentlich im Verzeichnis gelistet
+## Not a bridge: this relay is publicly listed in the Tor directory
 BridgeRelay 0
 
-## Als Verzeichnis-Cache mithelfen (ueblich und erwuenscht fuer Middle-Relays,
-## macht den Node NICHT zu einem Exit oder einer Bridge)
+## Acting as a directory cache is normal for a middle relay. It does
+## NOT turn this node into an exit or a bridge.
 DirCache ${DIR_CACHE}
 
-## --- Netzwerk ------------------------------------------------------
+## --- Network -------------------------------------------------------
 ORPort ${OR_PORT}
 ${ADDRESS_LINE}
 
-## --- Bandbreite ------------------------------------------------------
-## ACHTUNG: Tor kennt kein natives getrenntes Down-/Up-Limit - dieser Wert
-## gilt fuer BEIDE Richtungen gleichermassen. Fuer echtes asymmetrisches
-## Limit (z.B. 5MB/s down / 1MB/s up) sorgt zusaetzlich das tc-Shaping in
-## entrypoint.sh (siehe ENABLE_TC_SHAPING). Hier wird sicherheitshalber
-## der niedrigere Wert (Upload) als Tor-internes Limit gesetzt, damit Tor
-## selbst nie mehr anfragt, als die schwaechste Leitung hergibt.
-RelayBandwidthRate ${BANDWIDTH_RATE}
-RelayBandwidthBurst ${BANDWIDTH_BURST}
-MaxAdvertisedBandwidth ${MAX_ADVERTISED_BANDWIDTH}
-
-## Optionale Tages-/Monats-Obergrenze fuer das insgesamt uebertragene
-## Datenvolumen (leer lassen = deaktiviert)
+## --- Optional limits ------------------------------------------------
+${BANDWIDTH_LINES}
 ${ACCOUNTING_LINES}
-
-## --- Mehrere eigene Relays als Familie kennzeichnen (optional) -----
 ${MYFAMILY_LINE}
 
-## --- Sicherheit / Hardening -----------------------------------------
+## --- Hardening --------------------------------------------------------
 Sandbox 1
 SafeLogging 1
 DisableDebuggerAttachment 1
@@ -54,11 +40,12 @@ NoExec 1
 AvoidDiskWrites 1
 HardwareAccel 0
 
-## --- Logging (nach stdout, damit `docker logs` funktioniert) -------
+## --- Logging (stdout, so `docker logs` works) -----------------------
 Log notice stdout
 RunAsDaemon 0
 
-## --- Datenverzeichnis (per Volume persistieren, sonst neue Relay-Identitaet
-## bei jedem Container-Neustart!) --------------------------------------
+## --- Data directory ---------------------------------------------------
+## Keep this on a persistent volume, otherwise the relay gets a brand new
+## identity - and loses all network reputation - on every restart.
 DataDirectory /var/lib/tor
 User debian-tor

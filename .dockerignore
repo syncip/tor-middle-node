@@ -1,8 +1,11 @@
 .git
 .github
 .env
+.env.gluetun
 .env.example
-README.md
+.env.gluetun.example
 docker-compose.yml
+docker-compose.gluetun.yml
+README.md
+LICENSE
 *.md
-tor-data/

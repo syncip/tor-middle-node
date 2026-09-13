@@ -1,125 +1,236 @@
 # tor-middle-relay
 
-Minimaler, gehärteter Docker-Container für einen **reinen Tor Middle-Relay**
-(kein Exit, keine Bridge). Basiert auf dem offiziellen, signierten
-Debian-Paket-Repository des Tor Projects und läuft standardmäßig als
-Non-Root-User (`debian-tor`).
+A minimal, hardened Docker image for running a **pure Tor middle relay** —
+no exit, no bridge, nothing else. Built on the official, signed Tor Project
+Debian packages and running as an unprivileged, non-root user.
 
-## Eigenschaften
+Image: **[r600/tor-middle-relay](https://hub.docker.com/r/r600/tor-middle-relay)**
 
-- **Reiner Middle-Relay**: `ExitRelay 0`, `ExitPolicy reject *:*`, `BridgeRelay 0`
-  – dieser Node leitet ausschließlich Traffic zwischen anderen Relays weiter
-  und initiiert selbst keine Exit-Verbindungen ins offene Internet.
-- **Offizielle Tor-Pakete**: Installation über `deb.torproject.org` inkl.
-  GPG-Signaturprüfung, keine selbst kompilierten Binaries.
-- **Hardening**: `Sandbox 1`, `SafeLogging 1`, `DisableDebuggerAttachment 1`,
-  `NoExec 1`, `AvoidDiskWrites 1`, Ausführung als Non-Root.
-- **Bandbreiten-Limit**: Standardmäßig 5 MB/s Download / 1 MB/s Upload
-  (konfigurierbar), umgesetzt über zwei sich ergänzende Mechanismen (siehe
-  unten).
-- **Persistente Relay-Identität** über ein Docker-Volume – wichtig, da ein
-  Relay ohne persistente Keys bei jedem Neustart seine Reputation im
-  Tor-Netzwerk verliert.
-- **Healthcheck** und `docker logs`-taugliches Logging (stdout).
-- **GitHub Actions Workflow**, der das Image automatisch für `amd64` und
-  `arm64` baut und nach Docker Hub pusht.
+## What it does
 
-## Wichtiger Hinweis zur Bandbreite
+- **Pure middle relay**: `ExitRelay 0`, `ExitPolicy reject *:*`, `IPv6Exit 0`,
+  `BridgeRelay 0`, `SocksPort 0`. This node only forwards encrypted traffic
+  between other Tor relays. It never originates exit traffic and is not a bridge.
+- **Official Tor packages** from `deb.torproject.org`, GPG-verified. No
+  self-compiled binaries.
+- **Hardened**: non-root (`debian-tor`), `Sandbox 1`, `SafeLogging 1`,
+  `DisableDebuggerAttachment 1`, `NoExec 1`, read-only root filesystem,
+  all Linux capabilities dropped, `no-new-privileges`.
+- **Persistent identity** via a Docker volume. Without it the relay gets a
+  new identity on every restart and loses all accumulated reputation.
+- **Multi-arch**: `linux/amd64` and `linux/arm64`.
 
-Tor selbst besitzt **kein natives, getrenntes Down-/Upload-Limit** – die
-Einstellung `RelayBandwidthRate` gilt für beide Richtungen gleichermaßen.
-Dieses Setup kombiniert deshalb zwei Ebenen:
-
-1. **Tor-internes Limit** (`BANDWIDTH_RATE` in `.env`): symmetrisches
-   Sicherheitsnetz, standardmäßig auf den niedrigeren der beiden Werte
-   (Upload) gesetzt, damit Tor nie mehr anfragt, als die schwächste Leitung
-   hergibt.
-2. **Echtes asymmetrisches Shaping via `tc`/`ifb`** (Linux Traffic Control)
-   im Entrypoint-Skript, aktivierbar über `ENABLE_TC_SHAPING=true`. Das
-   erzwingt die getrennten Limits auf Netzwerkinterface-Ebene.
-
-Für Punkt 2 muss der Container mit der Capability `NET_ADMIN` gestartet
-werden (siehe `docker-compose.yml`). Das funktioniert zuverlässig auf einem
-Linux-Host (VPS, dediziertem Server); in manchen Cloud-Overlay-Netzwerken
-oder unter Docker Desktop (Mac/Windows) kann das Ingress-Shaping
-eingeschränkt sein. Falls es dort nicht greift, bleibt zumindest das
-Tor-interne, symmetrische Limit aktiv.
-
-## Schnellstart
+## Quick start
 
 ```bash
-git clone https://github.com/DEIN_USER/tor-middle-relay.git
-cd tor-middle-relay
+git clone https://github.com/syncip/tor-middle-node.git
+cd tor-middle-node
 cp .env.example .env
-# .env anpassen: NICKNAME, CONTACT_INFO, ggf. Bandbreiten-Werte
-
-docker compose up -d --build
+# edit .env: set NICKNAME and CONTACT_INFO
+docker compose up -d
 docker compose logs -f
 ```
 
-Nach ein paar Minuten solltest du in den Logs sehen, dass der Relay als
-"Self-testing indicates ... OR port reachable" bzw. "Registered server
-descriptor" meldet. Es kann bis zu ein paar Stunden dauern, bis der Relay im
-öffentlichen Tor-Verzeichnis (Consensus) auftaucht.
+Watch the logs for `Self-testing indicates your ORPort ... is reachable`.
+It can take a few hours before the relay shows up in the public Tor
+consensus, and several days before it carries meaningful traffic.
 
-## Konfiguration (`.env`)
+## Example 1: plain middle relay
 
-| Variable                     | Beschreibung                                                       | Default                |
-|-------------------------------|---------------------------------------------------------------------|-------------------------|
-| `NICKNAME`                   | Relay-Name (max. 19 Zeichen, alphanumerisch)                        | *(Pflicht)*             |
-| `CONTACT_INFO`                | Kontaktinfo, damit dich Tor-Admins bei Problemen erreichen können     | *(empfohlen)*           |
-| `OR_PORT`                     | Port für Relay-zu-Relay-Traffic                                     | `9001`                  |
-| `RELAY_ADDRESS`               | Öffentliche IP, nur setzen falls Auto-Erkennung fehlschlägt          | *(leer = auto)*         |
-| `DIR_CACHE`                   | Als Verzeichnis-Cache mithelfen (`0`/`1`)                            | `1`                     |
-| `MYFAMILY`                    | Fingerprints weiterer eigener Relays, kommagetrennt                 | *(leer)*                |
-| `BANDWIDTH_RATE`              | Tor-internes, symmetrisches Dauerlimit                              | `1 MBytes`              |
-| `BANDWIDTH_BURST`             | Tor-internes Burst-Limit                                            | `2 MBytes`              |
-| `MAX_ADVERTISED_BANDWIDTH`    | Im Verzeichnis beworbene Bandbreite                                 | `1 MBytes`              |
-| `ACCOUNTING_MAX`              | Optionales Datenvolumen-Limit, z.B. `500 GBytes`                    | *(leer = kein Limit)*   |
-| `ACCOUNTING_START`            | Abrechnungszeitraum, z.B. `month 1 00:00`                           | `month 1 00:00`         |
-| `ENABLE_TC_SHAPING`           | Echtes asymmetrisches Down-/Upload-Limit aktivieren                 | `true`                  |
-| `IFACE`                       | Netzwerkinterface im Container für das Shaping                      | `eth0`                  |
-| `DOWNLOAD_LIMIT_MBIT`         | Download-Limit in Mbit/s (5 MB/s ≈ 40)                              | `40`                    |
-| `UPLOAD_LIMIT_MBIT`           | Upload-Limit in Mbit/s (1 MB/s ≈ 8)                                 | `8`                     |
+`docker-compose.yml`:
 
-## Auf Docker Hub veröffentlichen
+```yaml
+services:
+  tor-middle-relay:
+    image: r600/tor-middle-relay:latest
+    container_name: tor-middle-relay
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "9001:9001"
+    volumes:
+      - tor-data:/var/lib/tor
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /etc/tor
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-### Manuell
-
-```bash
-docker build -t DEIN_DOCKERHUB_USER/tor-middle-relay:latest .
-docker login
-docker push DEIN_DOCKERHUB_USER/tor-middle-relay:latest
+volumes:
+  tor-data:
 ```
 
-### Automatisch per GitHub Actions
+`.env`:
 
-Der mitgelieferte Workflow (`.github/workflows/docker-publish.yml`) baut das
-Image bei jedem Push auf `main` (und bei Git-Tags `v*.*.*`) für `amd64` und
-`arm64` und pusht es nach Docker Hub. Dafür in den Repo-Settings unter
-**Settings → Secrets and variables → Actions** zwei Secrets anlegen:
+```ini
+NICKNAME=MyMiddleRelay
+CONTACT_INFO=Your Name <your-email@example.com>
+OR_PORT=9001
+RELAY_ADDRESS=
+DIR_CACHE=1
+MYFAMILY=
 
-- `DOCKERHUB_USERNAME` – dein Docker-Hub-Benutzername
-- `DOCKERHUB_TOKEN` – ein Docker-Hub-Access-Token (kein Passwort; erstellbar
-  unter Docker Hub → Account Settings → Security → New Access Token)
+# Optional cap, leave empty for unlimited
+BANDWIDTH_RATE=
+BANDWIDTH_BURST=
+MAX_ADVERTISED_BANDWIDTH=
+ACCOUNTING_MAX=
+ACCOUNTING_START=month 1 00:00
+```
 
-## Sicherheits- und Betriebshinweise
+```bash
+docker compose up -d
+```
 
-- **Relay-Keys sichern**: Das Volume `tor-data` (bzw. `/var/lib/tor`) enthält
-  die private Identität des Relays. Backup empfohlen, sonst verliert der
-  Relay bei Datenverlust seine im Netzwerk aufgebaute Reputation.
-- **Nur `ORPort` exponieren**: Es wird bewusst kein `SocksPort` nach außen
-  geöffnet und kein `DirPort` erzwungen.
-- **Rechtliche Lage**: Ein Middle-Relay leitet nur verschlüsselten Traffic
-  zwischen anderen Tor-Relays weiter und erscheint nicht als Ursprungs-IP von
-  Exit-Traffic – rechtlich deutlich unkritischer als ein Exit-Relay. Prüfe
-  trotzdem die Nutzungsbedingungen deines Hosting-/VPS-Anbieters, manche
-  untersagen Tor-Relays generell.
-- **`NET_ADMIN`-Capability**: Wird nur für das `tc`-Shaping benötigt. Wenn du
-  `ENABLE_TC_SHAPING=false` setzt, kannst du `cap_add: [NET_ADMIN]` aus der
-  `docker-compose.yml` entfernen und läufst mit minimalen Rechten.
+## Example 2: middle relay behind gluetun (VPN)
 
-## Projektstruktur
+The gluetun container owns the network stack and the relay joins it with
+`network_mode: "service:gluetun"`. The relay therefore has no `ports:`
+section of its own — the ORPort is published on the gluetun service.
+
+> **Your VPN provider must support port forwarding**, and the forwarded port
+> has to reach the relay's ORPort. A relay whose ORPort is unreachable from
+> the outside will never be included in the consensus. Also note that many
+> VPN providers prohibit running Tor relays over their service — check their
+> terms first.
+
+`docker-compose.gluetun.yml`:
+
+```yaml
+services:
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: tor-relay-gluetun
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file:
+      - .env.gluetun
+    ports:
+      - "9001:9001"   # published here, not on the tor service
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "https://api.ipify.org"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  tor-middle-relay:
+    image: r600/tor-middle-relay:latest
+    container_name: tor-middle-relay
+    restart: unless-stopped
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      - tor-data:/var/lib/tor
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /etc/tor
+
+volumes:
+  tor-data:
+```
+
+`.env.gluetun` (WireGuard example — see the
+[gluetun wiki](https://github.com/qdm12/gluetun-wiki) for your provider):
+
+```ini
+VPN_SERVICE_PROVIDER=your_provider
+VPN_TYPE=wireguard
+WIREGUARD_PRIVATE_KEY=your_private_key
+WIREGUARD_ADDRESSES=10.0.0.2/32
+SERVER_COUNTRIES=Netherlands
+
+# Let inbound ORPort connections through the tunnel
+FIREWALL_INPUT_PORTS=9001
+```
+
+In `.env`, set `RELAY_ADDRESS` to the VPN's public IP if Tor's
+auto-detection picks the wrong address:
+
+```ini
+RELAY_ADDRESS=203.0.113.10
+```
+
+```bash
+cp .env.example .env
+cp .env.gluetun.example .env.gluetun
+docker compose -f docker-compose.gluetun.yml up -d
+```
+
+## Configuration
+
+| Variable | Description | Default |
+|---|---|---|
+| `NICKNAME` | Relay name, max 19 alphanumeric chars | *(required)* |
+| `CONTACT_INFO` | Contact details so Tor admins can reach you | *(recommended)* |
+| `OR_PORT` | Port for relay-to-relay traffic | `9001` |
+| `RELAY_ADDRESS` | Public IP; only set if auto-detection fails | *(empty = auto)* |
+| `DIR_CACHE` | Act as a directory cache (`0`/`1`) | `1` |
+| `MYFAMILY` | Comma-separated fingerprints of your other relays | *(empty)* |
+| `BANDWIDTH_RATE` | Sustained rate, e.g. `5 MBytes` | *(empty = unlimited)* |
+| `BANDWIDTH_BURST` | Burst rate, e.g. `10 MBytes` | *(empty)* |
+| `MAX_ADVERTISED_BANDWIDTH` | Bandwidth advertised in the directory | *(empty)* |
+| `ACCOUNTING_MAX` | Total data volume cap, e.g. `500 GBytes` | *(empty = no cap)* |
+| `ACCOUNTING_START` | Accounting period | `month 1 00:00` |
+
+**On bandwidth:** Tor applies a single rate to both directions —
+`RelayBandwidthRate` is not a separate download/upload limit. If you need
+asymmetric shaping, do it on the host or router (e.g. `tc`), not in the
+container.
+
+## Publishing to Docker Hub
+
+`.github/workflows/docker-publish.yml` builds for `amd64` and `arm64` and
+pushes to `r600/tor-middle-relay` on every push to `main` and on `v*.*.*`
+tags. Add two repository secrets under
+**Settings → Secrets and variables → Actions**:
+
+- `DOCKERHUB_USERNAME` — your Docker Hub username
+- `DOCKERHUB_TOKEN` — a Docker Hub access token (Docker Hub → Account
+  Settings → Personal access tokens), **not** your password
+
+Tagging a release also publishes versioned tags:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+## Notes
+
+- **Back up `/var/lib/tor`.** It holds the relay's private identity keys.
+  Losing them means starting over from zero reputation.
+- **Only the ORPort is exposed.** No SocksPort, no forced DirPort.
+- **Legal context:** a middle relay only forwards already-encrypted traffic
+  between Tor relays and never appears as the source IP of exit traffic —
+  far less legally sensitive than an exit relay. Still, check your
+  hosting/VPS provider's terms; some prohibit Tor relays entirely.
+- Check your relay's status at [Tor Metrics](https://metrics.torproject.org/rs.html)
+  once it appears in the consensus.
+
+## Files
 
 ```
 .
@@ -127,12 +238,14 @@ Image bei jedem Push auf `main` (und bei Git-Tags `v*.*.*`) für `amd64` und
 ├── torrc.template
 ├── entrypoint.sh
 ├── docker-compose.yml
+├── docker-compose.gluetun.yml
 ├── .env.example
+├── .env.gluetun.example
 ├── .gitignore
 ├── .dockerignore
 └── .github/workflows/docker-publish.yml
 ```
 
-## Lizenz
+## License
 
 MIT

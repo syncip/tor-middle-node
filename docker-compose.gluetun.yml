@@ -1,0 +1,67 @@
+# Middle relay routed through a gluetun VPN container.
+#
+# The gluetun container owns the network stack; the relay joins it via
+# network_mode: "service:gluetun". That means the relay has no network
+# of its own and no "ports:" section - the ORPort must be published on
+# the gluetun service instead.
+#
+# Your VPN provider must support port forwarding and you must forward
+# the ORPort, otherwise the relay will not be reachable from the Tor
+# network. See README.md.
+#
+# Usage:
+#   cp .env.example .env
+#   cp .env.gluetun.example .env.gluetun
+#   docker compose -f docker-compose.gluetun.yml up -d
+
+services:
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: tor-relay-gluetun
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file:
+      - .env.gluetun
+    ports:
+      # Published here, not on the tor service, because the relay shares
+      # this container's network namespace.
+      - "9001:9001"
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "https://api.ipify.org"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  tor-middle-relay:
+    image: r600/tor-middle-relay:latest
+    container_name: tor-middle-relay
+    restart: unless-stopped
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      - tor-data:/var/lib/tor
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /etc/tor
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  tor-data:

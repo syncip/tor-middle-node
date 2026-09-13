@@ -1,4 +1,4 @@
 .env
+.env.gluetun
 *.log
-tor-data/
 .DS_Store
