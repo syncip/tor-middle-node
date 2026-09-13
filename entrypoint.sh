@@ -65,5 +65,6 @@ echo "-----------------------------------------------------"
 cat /etc/tor/torrc
 echo "-----------------------------------------------------"
 
+echo "[entrypoint] $(tor --version | head -1)"
 echo "[entrypoint] Starting Tor middle relay '${NICKNAME}' on port ${OR_PORT} ..."
 exec gosu debian-tor tor -f /etc/tor/torrc

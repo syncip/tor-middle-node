@@ -200,6 +200,62 @@ docker compose -f docker-compose.gluetun.yml up -d
 asymmetric shaping, do it on the host or router (e.g. `tc`), not in the
 container.
 
+## Keeping Tor up to date
+
+The Tor version is baked into the image at build time — the container does
+**not** update itself, and restarting it changes nothing. This matters for a
+relay: the directory authorities reject end-of-life Tor versions, so a relay
+left on an old version will eventually be dropped from the consensus. Tor
+warns about this in the logs (`Please upgrade! This version of Tor is
+obsolete...`) well before it happens.
+
+Two things keep this current:
+
+**1. The image gets rebuilt weekly.** The workflow has a `schedule` trigger
+that rebuilds every Monday, picking up new Tor releases and Debian security
+updates without needing a commit. Scheduled runs set `no-cache: true` — this
+is deliberate and important: with the layer cache active, the
+`apt-get install tor` layer would be reused and the "rebuild" would ship the
+exact same old version. You can also trigger this manually via
+**Actions → Build and Publish Docker Image → Run workflow**, optionally
+ticking "Build without cache".
+
+**2. Your host has to pull the new image.** A rebuilt image on Docker Hub
+doesn't reach your server on its own:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+To automate it, add [Watchtower](https://github.com/containrrr/watchtower):
+
+```yaml
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --cleanup --schedule "0 0 5 * * *" tor-middle-relay
+```
+
+Recreating the container is safe — the relay's identity keys live on the
+`tor-data` volume, so the fingerprint and accumulated reputation survive the
+update. Expect a short dip in traffic while the relay reconnects.
+
+Check which version is running:
+
+```bash
+docker compose logs tor-middle-relay | grep "Tor version"
+```
+
+Or inspect an image without starting it:
+
+```bash
+docker run --rm --entrypoint cat r600/tor-middle-relay:latest /etc/tor-version
+```
+
 ## Publishing to Docker Hub
 
 `.github/workflows/docker-publish.yml` builds for `amd64` and `arm64` and

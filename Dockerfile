@@ -28,7 +28,11 @@ RUN set -eux; \
     apt-get update && apt-get install -y --no-install-recommends \
         tor \
         deb.torproject.org-keyring \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*; \
+    tor --version | head -1 > /etc/tor-version
+
+# Record the installed Tor version so it can be inspected without starting
+# the container:  docker run --rm --entrypoint cat IMAGE /etc/tor-version
 
 # --- Configuration & entrypoint ---------------------------------------
 # The template lives outside /etc/tor on purpose: the container runs with
