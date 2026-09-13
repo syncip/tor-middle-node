@@ -1,0 +1,27 @@
+services:
+  tor-middle-relay:
+    build: .
+    # Alternativ, sobald auf Docker Hub veroeffentlicht:
+    # image: DEIN_DOCKERHUB_USER/tor-middle-relay:latest
+    container_name: tor-middle-relay
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "9001:9001"
+    volumes:
+      - tor-data:/var/lib/tor
+    # Noetig fuer echtes asymmetrisches Bandbreiten-Shaping (tc/ifb).
+    # Wenn ENABLE_TC_SHAPING=false in .env, kann diese Zeile entfallen.
+    cap_add:
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  tor-data:

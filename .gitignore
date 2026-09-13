@@ -1,0 +1,4 @@
+.env
+*.log
+tor-data/
+.DS_Store
