@@ -2,11 +2,20 @@ name: Build and Publish Docker Image
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "master"]
     tags: ["v*.*.*"]
   pull_request:
-    branches: ["main"]
-  workflow_dispatch: {}
+    branches: ["main", "master"]
+  schedule:
+    # Weekly rebuild (Mondays 04:17 UTC) so the image picks up new Tor
+    # releases and Debian security updates without needing a commit.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      no_cache:
+        description: "Build without cache (forces a fresh apt install)"
+        type: boolean
+        default: false
 
 env:
   DOCKERHUB_IMAGE: r600/tor-middle-relay
@@ -53,5 +62,24 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Scheduled runs bypass the cache entirely, otherwise the cached
+          # "apt-get install tor" layer would be reused and the rebuild
+          # would ship the exact same (old) Tor version.
+          no-cache: ${{ github.event_name == 'schedule' || inputs.no_cache == true }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Update Docker Hub description
+        # Pushing an image does not update the Docker Hub README - that's a
+        # separate API call. Needs a token with read/write/DELETE scope; a
+        # plain push token returns 403, so this must not fail the build.
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        continue-on-error: true
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_DESCRIPTION_TOKEN || secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.DOCKERHUB_IMAGE }}
+          short-description: "Minimal, hardened Tor middle relay - no exit, no bridge"
+          readme-filepath: ./README.md
+          enable-url-completion: true

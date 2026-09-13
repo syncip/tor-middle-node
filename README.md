@@ -277,6 +277,22 @@ tags. Add two repository secrets under
 - `DOCKERHUB_TOKEN` — a Docker Hub access token (Docker Hub → Account
   Settings → Personal access tokens), **not** your password
 
+The workflow also pushes this README to the Docker Hub repository page —
+that's a separate API call, which is why an image push alone leaves the
+Docker Hub overview empty.
+
+That step needs a token with **read/write/delete** scope. A plain push token
+(read/write) gets a 403 from the description API. Two options:
+
+- Give `DOCKERHUB_TOKEN` read/write/delete scope, or
+- Keep the push token narrow and add a second secret,
+  `DOCKERHUB_DESCRIPTION_TOKEN`, with read/write/delete — the workflow uses
+  it when present and falls back to `DOCKERHUB_TOKEN` otherwise
+
+The step is marked `continue-on-error`, so a missing or under-scoped token
+logs a warning instead of failing the build. Docker Hub truncates the README
+at 25,000 bytes and the short description at 100.
+
 Tagging a release also publishes versioned tags:
 
 ```bash
