@@ -9,3 +9,5 @@ docker-compose.gluetun.yml
 README.md
 LICENSE
 *.md
+__pycache__
+*.pyc

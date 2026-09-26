@@ -1,39 +1,33 @@
 ## ============================================================
 ## Tor middle relay configuration (template)
 ## Rendered to /etc/tor/torrc by entrypoint.sh via envsubst.
+## Every substituted value is validated by entrypoint.sh first.
 ## ============================================================
 
 ## --- Identity ---------------------------------------------------
 Nickname ${NICKNAME}
-ContactInfo ${CONTACT_INFO}
+${CONTACT_LINE}
 
-## --- Pure middle relay --------------------------------------------
-## No local SOCKS proxy for clients on this host
-SocksPort 0
-
-## No exit traffic ever leaves the Tor network through this node
-ExitRelay 0
-ExitPolicy reject *:*
-IPv6Exit 0
-
-## Not a bridge: this relay is publicly listed in the Tor directory
-BridgeRelay 0
+## --- Network -------------------------------------------------------
+ORPort ${OR_PORT_LINE}
+${ADDRESS_LINE}
 
 ## Acting as a directory cache is normal for a middle relay. It does
 ## NOT turn this node into an exit or a bridge.
 DirCache ${DIR_CACHE}
-
-## --- Network -------------------------------------------------------
-ORPort ${OR_PORT}
-${ADDRESS_LINE}
 
 ## --- Optional limits ------------------------------------------------
 ${BANDWIDTH_LINES}
 ${ACCOUNTING_LINES}
 ${MYFAMILY_LINE}
 
+## --- Local control socket (dashboard only) -------------------------
+## Unix socket on a tmpfs, never a TCP port. Empty when the dashboard
+## is disabled.
+${CONTROL_LINES}
+
 ## --- Hardening --------------------------------------------------------
-Sandbox 1
+Sandbox ${SANDBOX}
 SafeLogging 1
 DisableDebuggerAttachment 1
 NoExec 1
@@ -47,5 +41,17 @@ RunAsDaemon 0
 ## --- Data directory ---------------------------------------------------
 ## Keep this on a persistent volume, otherwise the relay gets a brand new
 ## identity - and loses all network reputation - on every restart.
+## No "User" option: the entrypoint already drops to debian-tor via gosu,
+## and Tor refuses to start if User is set while not running as root.
 DataDirectory /var/lib/tor
-User debian-tor
+
+## --- Pure middle relay (keep this block LAST) -------------------------
+## Tor uses the last value for single-value options, so nothing above can
+## override these. The entrypoint additionally passes the same options on
+## the command line (which beats the torrc) and refuses to start unless
+## Tor's parsed config confirms them.
+SocksPort 0
+ExitRelay 0
+ExitPolicy reject *:*
+IPv6Exit 0
+BridgeRelay 0

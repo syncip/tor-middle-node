@@ -7,16 +7,27 @@ services:
       - .env
     ports:
       - "9001:9001"
+      # Dashboard: bound to localhost only. Reach it from another machine
+      # through an SSH tunnel: ssh -L 8080:127.0.0.1:8080 your-server
+      - "127.0.0.1:8080:8080"
     volumes:
       - tor-data:/var/lib/tor
+      - dashboard-data:/var/lib/tor-dashboard
+    # Everything is dropped except what the entrypoint needs to hand the
+    # data directories to the service users and to drop privileges.
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
     security_opt:
       - no-new-privileges:true
     read_only: true
     tmpfs:
       - /tmp
       - /etc/tor
+      - /run/tor
     logging:
       driver: json-file
       options:
@@ -25,3 +36,4 @@ services:
 
 volumes:
   tor-data:
+  dashboard-data:
