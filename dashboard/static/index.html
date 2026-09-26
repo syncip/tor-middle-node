@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Tor Middle Relay</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1 id="nickname">Tor Middle Relay</h1>
+    <div class="sub" id="fingerprint">–</div>
+  </div>
+  <div class="badges">
+    <span class="badge" id="badge-conn"><span class="dot"></span><span class="lbl">verbinde…</span></span>
+    <span class="badge" id="badge-exit"><span class="dot"></span><span class="lbl">Exit-Prüfung…</span></span>
+  </div>
+</header>
+
+<main>
+  <section class="alert" id="alert" hidden></section>
+
+  <section class="tiles">
+    <div class="tile">
+      <div class="k">Live empfangen</div>
+      <div class="v" id="live-read">–</div>
+      <div class="s"><span class="key key-read"></span>Durchschnitt 10 s</div>
+    </div>
+    <div class="tile">
+      <div class="k">Live gesendet</div>
+      <div class="v" id="live-written">–</div>
+      <div class="s"><span class="key key-written"></span>Durchschnitt 10 s</div>
+    </div>
+    <div class="tile">
+      <div class="k">Heute (UTC)</div>
+      <div class="v" id="t-today">–</div>
+      <div class="s" id="t-today-s">–</div>
+    </div>
+    <div class="tile">
+      <div class="k">Dieser Monat</div>
+      <div class="v" id="t-month">–</div>
+      <div class="s" id="t-month-s">–</div>
+    </div>
+    <div class="tile">
+      <div class="k">Gesamt</div>
+      <div class="v" id="t-total">–</div>
+      <div class="s" id="t-total-s">–</div>
+    </div>
+    <div class="tile">
+      <div class="k">Verbindungen</div>
+      <div class="v" id="c-total">–</div>
+      <div class="s" id="c-split">–</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Live-Traffic <span class="muted">· letzte 10 Minuten</span></h2>
+      <div class="legend">
+        <span><span class="key key-read"></span>Empfangen</span>
+        <span><span class="key key-written"></span>Gesendet</span>
+      </div>
+    </div>
+    <div class="chart" id="chart-live"></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Traffic <span class="muted">· letzte 24 Stunden (Minutenmittel)</span></h2>
+      <div class="legend">
+        <span><span class="key key-read"></span>Empfangen</span>
+        <span><span class="key key-written"></span>Gesendet</span>
+      </div>
+    </div>
+    <div class="chart" id="chart-day"></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Traffic pro Tag <span class="muted">· letzte 30 Tage (UTC)</span></h2>
+      <div class="legend">
+        <span><span class="key key-read"></span>Empfangen</span>
+        <span><span class="key key-written"></span>Gesendet</span>
+      </div>
+    </div>
+    <div class="chart" id="chart-days"></div>
+    <details>
+      <summary>Als Tabelle anzeigen</summary>
+      <table class="kv" id="days-table"><thead><tr><th>Tag</th><th>Empfangen</th><th>Gesendet</th></tr></thead><tbody></tbody></table>
+    </details>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>Relay</h2>
+      <table class="kv" id="relay-table"><tbody></tbody></table>
+    </section>
+    <section class="card">
+      <h2>Verbindungen</h2>
+      <table class="kv" id="conn-table"><tbody></tbody></table>
+      <p class="note">Nur Anzahlen – Adressen anderer Relays oder Clients werden bewusst nicht angezeigt.</p>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Einstellungen <span class="muted">· von Tor gemeldet (nur lesend)</span></h2>
+    <table class="kv" id="settings-table"><tbody></tbody></table>
+  </section>
+
+  <footer class="foot" id="footer">–</footer>
+</main>
+
+<div class="tooltip" id="tooltip" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

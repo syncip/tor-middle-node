@@ -29,13 +29,12 @@ services:
       # Published here, not on the tor service, because the relay shares
       # this container's network namespace.
       - "9001:9001"
+      # Dashboard of the relay, localhost only (see docker-compose.yml)
+      - "127.0.0.1:8080:8080"
     security_opt:
       - no-new-privileges:true
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "https://api.ipify.org"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+    # No healthcheck override: gluetun ships its own HEALTHCHECK, which
+    # checks the tunnel without calling a third-party IP lookup service.
 
   tor-middle-relay:
     image: r600/tor-middle-relay:latest
@@ -49,14 +48,20 @@ services:
       - .env
     volumes:
       - tor-data:/var/lib/tor
+      - dashboard-data:/var/lib/tor-dashboard
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
     security_opt:
       - no-new-privileges:true
     read_only: true
     tmpfs:
       - /tmp
       - /etc/tor
+      - /run/tor
     logging:
       driver: json-file
       options:
@@ -65,3 +70,4 @@ services:
 
 volumes:
   tor-data:
+  dashboard-data:

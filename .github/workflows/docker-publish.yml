@@ -54,6 +54,49 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
 
+      # Build a local amd64 image first and prove that it can never come up
+      # as an exit relay, before anything is pushed.
+      - name: Build test image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: tor-middle-relay:test
+          no-cache: ${{ github.event_name == 'schedule' || inputs.no_cache == true }}
+          cache-from: type=gha
+
+      - name: Smoke test (config safety)
+        run: |
+          set -eu
+          run() {
+            docker run --rm --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
+              --security-opt no-new-privileges:true --read-only \
+              --tmpfs /tmp --tmpfs /etc/tor --tmpfs /run/tor "$@"
+          }
+          # The default config must pass the built-in safety check
+          run -e NICKNAME=CiTest tor-middle-relay:test check
+          # Attempts to smuggle extra torrc lines in must be rejected
+          if run -e NICKNAME=CiTest -e CONTACT_INFO="$(printf 'x\nExitPolicy accept *:*')" tor-middle-relay:test check; then
+            echo "newline injection was not rejected"; exit 1
+          fi
+          if run -e NICKNAME='bad name' tor-middle-relay:test check; then
+            echo "invalid nickname was not rejected"; exit 1
+          fi
+          # Start for real and wait for the relay + dashboard to come up
+          docker run -d --name relay --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
+            --security-opt no-new-privileges:true --read-only \
+            --tmpfs /tmp --tmpfs /etc/tor --tmpfs /run/tor \
+            -e NICKNAME=CiTest -p 127.0.0.1:8080:8080 tor-middle-relay:test
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/api/status | grep -q '"connected": true'; then break; fi
+            sleep 2
+          done
+          docker logs relay
+          status="$(curl -fsS http://127.0.0.1:8080/api/status)"
+          echo "${status}" | python3 -c 'import json,sys; s=json.load(sys.stdin); c=s["settings"]; assert s["connected"] and s["safety"]["ok"]; assert c["ExitRelay"]=="0" and c["ExitPolicy"]=="reject *:*" and c["IPv6Exit"]=="0" and c["BridgeRelay"]=="0", c; print("dashboard OK, exit disabled")'
+          docker rm -f relay
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
