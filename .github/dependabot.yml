@@ -1,0 +1,11 @@
+# Keeps the GitHub Actions in the workflow up to date (opens PRs).
+# Tor and Debian packages don't need this: the image is rebuilt weekly.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
