@@ -88,17 +88,49 @@ jobs:
             echo "invalid nickname was not rejected"; exit 1
           fi
           # Start for real and wait for the relay + dashboard to come up
-          docker run -d --name relay --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
+          docker run -d --name relay --restart unless-stopped \
+            --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
             --security-opt no-new-privileges:true --read-only \
             --tmpfs /tmp --tmpfs /etc/tor --tmpfs /run/tor \
-            -e NICKNAME=CiTest -p 127.0.0.1:8080:8080 tor-middle-relay:test
-          for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8080/api/status | grep -q '"connected": true'; then break; fi
-            sleep 2
-          done
-          docker logs relay
-          status="$(curl -fsS http://127.0.0.1:8080/api/status)"
-          echo "${status}" | python3 -c 'import json,sys; s=json.load(sys.stdin); c=s["settings"]; assert s["connected"] and s["safety"]["ok"]; assert c["ExitRelay"]=="0" and c["ExitPolicy"]=="reject *:*" and c["IPv6Exit"]=="0" and c["BridgeRelay"]=="0", c; print("dashboard OK, exit disabled")'
+            -v ci-dashboard:/var/lib/tor-dashboard \
+            -e NICKNAME=CiTest -e DASHBOARD_PASSWORD=ci-password \
+            -p 127.0.0.1:8080:8080 tor-middle-relay:test
+          api() { curl -fsS -u admin:ci-password "http://127.0.0.1:8080$1"; }
+          # Wait until Tor answers with the expected nickname and a fresh start
+          wait_for() {
+            for i in $(seq 1 60); do
+              if api /api/status 2>/dev/null | python3 -c 'import json,sys; s=json.load(sys.stdin); sys.exit(not (s["connected"] and s["settings"]["Nickname"]==sys.argv[1] and s["tor"]["uptime"] < 60))' "$1"; then
+                return 0
+              fi
+              sleep 2
+            done
+            docker logs relay; echo "relay did not come up as $1"; exit 1
+          }
+          check_safe() {
+            api /api/status | python3 -c 'import json,sys; s=json.load(sys.stdin); c=s["settings"]; assert s["connected"] and s["safety"]["ok"]; assert c["ExitRelay"]=="0" and c["ExitPolicy"]=="reject *:*" and c["IPv6Exit"]=="0" and c["BridgeRelay"]=="0", c; print("exit disabled:", c["Nickname"])'
+          }
+          wait_for CiTest
+          check_safe
+
+          # Setup page: writes need the CSRF token, unknown keys are refused
+          token="$(api /api/settings | python3 -c 'import json,sys; print(json.load(sys.stdin)["csrf"])')"
+          post() { curl -sS -o /dev/null -w '%{http_code}' -u admin:ci-password -X POST \
+                     -H 'Content-Type: application/json' -H "X-CSRF-Token: $2" -d "$3" "http://127.0.0.1:8080$1"; }
+          test "$(post /api/settings wrong '{"values":{}}')" = 403
+          test "$(post /api/settings "${token}" '{"values":{"EXIT_RELAY":"1"}}')" = 400
+          test "$(post /api/settings "${token}" '{"values":{"CONTACT_INFO":"x\nExitRelay 1"}}')" = 400
+          # Change the nickname and restart Tor through the dashboard
+          test "$(post /api/settings "${token}" '{"values":{"NICKNAME":"CiChanged"},"restart":true}')" = 200
+          wait_for CiChanged
+          check_safe
+
+          # A tampered settings file must never get past the entrypoint
+          docker exec -u tordash relay python3 -c 'import json; json.dump({"values": {"NICKNAME": "Tampered", "CONTACT_INFO": "x\nExitPolicy accept *:*", "ExitRelay": "1"}}, open("/var/lib/tor-dashboard/settings.json", "w"))'
+          docker restart relay
+          wait_for CiTest
+          check_safe
+          docker logs relay 2>&1 | grep -q "settings from the setup page were NOT applied"
+          docker logs relay | tail -40
           docker rm -f relay
 
       - name: Build and push

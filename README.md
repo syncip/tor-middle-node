@@ -1,7 +1,7 @@
 # tor-middle-relay
 
 A minimal, hardened Docker image for running a **pure Tor middle relay** —
-no exit, no bridge, nothing else — with a small, read-only web dashboard.
+no exit, no bridge, nothing else — with a small web dashboard.
 Built on the official, signed Tor Project Debian packages and running as
 unprivileged, non-root users.
 
@@ -14,8 +14,9 @@ Image: **[r600/tor-middle-relay](https://hub.docker.com/r/r600/tor-middle-relay)
   encrypted traffic between other Tor relays. It never originates exit
   traffic and is not a bridge. There is no setting to change this — see
   [Why this can never become an exit](#why-this-can-never-become-an-exit).
-- **Dashboard**: live and historical traffic, connections, relay status and
-  the effective settings, on `127.0.0.1:8080`.
+- **Dashboard**: live and historical traffic with zoom and range
+  selection, connections, relay status, and a password-protected setup
+  page to change settings and restart Tor — on `127.0.0.1:8080`.
 - **Official Tor packages** from `deb.torproject.org`, GPG-verified. No
   self-compiled binaries.
 - **Hardened**: non-root (`debian-tor`), `Sandbox 1`, `SafeLogging 1`,
@@ -230,8 +231,11 @@ docker compose -f docker-compose.gluetun.yml up -d
 | `ACCOUNTING_START` | Accounting period | `month 1 00:00` |
 | `DASHBOARD_ENABLED` | Run the dashboard (`0`/`1`) | `1` |
 | `DASHBOARD_PORT` | Dashboard port inside the container (change the `ports:` mapping too) | `8080` |
-| `DASHBOARD_PASSWORD` | HTTP basic auth password (any username) | *(empty = none)* |
+| `DASHBOARD_PASSWORD` | HTTP basic auth password (any username). Required to edit settings on the setup page | *(empty = read-only)* |
 | `SANDBOX` | Tor's seccomp sandbox (`0`/`1`) — only disable if Tor fails with a sandbox error | `1` |
+
+Settings saved on the dashboard's [setup page](#setup) override the
+identity, network, bandwidth, data limit and family values above.
 
 All values are validated at start (strict patterns, no line breaks); an
 invalid value stops the container with a clear error instead of producing
@@ -265,8 +269,9 @@ sure of it:
    entrypoint asks Tor for its parsed configuration (`--dump-config`) and
    refuses to start unless it confirms all of the above. While running,
    the dashboard checks the effective exit policy every few seconds and
-   halts Tor immediately if it ever accepts anything. The dashboard itself
-   can only send read-only commands to Tor.
+   halts Tor immediately if it ever accepts anything. The dashboard
+   cannot change Tor's configuration: settings from its setup page only
+   take effect through this same validated start.
 
 The CI workflow runs these checks (including injection attempts) against
 every image before it is pushed.
@@ -274,30 +279,84 @@ every image before it is pushed.
 ## Dashboard
 
 A small web page served from inside the container (Python standard
-library, no external scripts, no CDN):
+library, no external scripts, no CDN). Two pages:
+
+### Overview
 
 - **Live traffic**: received/sent rate over the last 10 minutes (1 s
-  resolution) and the last 24 hours (1 min averages).
-- **Traffic totals**: today, this month, all time, plus per-day bars for
-  the last 30 days. Stored on the `dashboard-data` volume, so they survive
-  restarts and image updates.
+  resolution).
+- **Traffic history**: 24 hours (1 min averages), 7, 30 or 90 days
+  (1 h averages).
+- **Traffic per day**: bars for the last 30 days, also as a table.
+- **Totals**: today, this month, all time.
 - **Connections**: number of Tor OR connections and established TCP
   connections (inbound on the ORPort / outbound). Only counts — no peer
   addresses are ever shown or logged.
 - **Relay status**: Tor version, uptime, fingerprint, reachability,
   consensus flags and bandwidth, accounting (if enabled).
-- **Settings**: the values Tor actually uses, with the exit-related ones
-  highlighted.
+- **Running configuration**: the values Tor actually uses, with the
+  exit-related ones highlighted.
 
-It talks to Tor through a Unix control socket on a tmpfs (`/run/tor`), not
-a TCP port, and runs as its own user (`tordash`) that can reach that
-socket but not the relay's identity keys. It is read-only: no button,
-form or API can change the relay.
+All charts are interactive:
 
-The compose files publish it on `127.0.0.1` only. If you publish it on a
-public interface anyway, set `DASHBOARD_PASSWORD` and put it behind a
-TLS reverse proxy. Set `DASHBOARD_ENABLED=0` to turn it off completely
-(the control socket is then not created either).
+- **Drag across a chart** to select a time range (or a range of days).
+  A panel below the chart shows received/sent totals, average and peak
+  rates for exactly that range.
+- **Zoom**: "Zoom to selection", or Ctrl + mouse wheel / trackpad pinch.
+  Shift + wheel pans while zoomed, double-click resets the zoom.
+
+Statistics are stored on the `dashboard-data` volume, so they survive
+restarts and image updates.
+
+### Setup
+
+Edit the relay's settings in the browser and restart Tor:
+
+| Section | Settings |
+|---|---|
+| Identity | Nickname, contact info |
+| Network | Public address, IPv6 on the ORPort, directory cache |
+| Bandwidth | Sustained rate, burst rate, advertised bandwidth |
+| Data limit | Maximum per period, period start |
+| Family | Fingerprints of your other relays |
+
+How it works:
+
+- Values saved on this page are stored on the `dashboard-data` volume and
+  **override `.env`** from the next Tor start. Each field shows where its
+  value comes from, and "reset to .env" removes the override again.
+- Changes take effect when Tor restarts ("Save & restart Tor" or "Restart
+  Tor"). Tor shuts down gracefully and Docker starts the container again,
+  which needs a restart policy such as `restart: unless-stopped` (as in
+  the provided compose files). The relay keeps its identity.
+- The settings go through **exactly the same validation and safety check
+  as `.env` values**. If Tor rejects one (e.g. a burst rate below the
+  sustained rate), the relay starts with the `.env` values instead and
+  the setup page shows why — a bad value can never lock you out.
+- **Not editable** here: everything exit-related (it is not a setting in
+  this image at all), the ORPort, the sandbox and the dashboard options.
+  They come from `.env` only.
+
+Editing requires a password. Without `DASHBOARD_PASSWORD` the setup page is
+read-only.
+
+### Security
+
+- The dashboard talks to Tor through a Unix control socket on a tmpfs
+  (`/run/tor`), not a TCP port. It runs as its own user (`tordash`) that
+  can reach that socket but not the relay's identity keys.
+- It never changes Tor's running configuration. The only control commands
+  it can send are read-only queries, a graceful restart and the
+  emergency halt of the exit guard. Settings only take effect through the
+  entrypoint's validated start.
+- Changes need the password (HTTP basic auth), a per-session CSRF token
+  and a same-origin JSON request, so other websites cannot trigger them
+  from your browser. Failed logins are slowed down.
+- The compose files publish the dashboard on `127.0.0.1` only. Reach it
+  through an SSH tunnel (see [Quick start](#quick-start)). If you publish
+  it on a public interface anyway, put it behind a TLS reverse proxy.
+- `DASHBOARD_ENABLED=0` turns it off completely (the control socket is
+  then not created either, and saved setup-page settings are ignored).
 
 ## Keeping Tor up to date
 

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,108 +9,199 @@
 </head>
 <body>
 <header class="top">
-  <div>
-    <h1 id="nickname">Tor Middle Relay</h1>
-    <div class="sub" id="fingerprint">–</div>
+  <div class="top-inner">
+    <div class="ident">
+      <h1 id="nickname">Tor Middle Relay</h1>
+      <div class="sub" id="fingerprint">–</div>
+    </div>
+    <div class="badges">
+      <span class="badge" id="badge-conn"><span class="dot"></span><span class="lbl">connecting…</span></span>
+      <span class="badge" id="badge-exit"><span class="dot"></span><span class="lbl">checking exit policy…</span></span>
+    </div>
   </div>
-  <div class="badges">
-    <span class="badge" id="badge-conn"><span class="dot"></span><span class="lbl">verbinde…</span></span>
-    <span class="badge" id="badge-exit"><span class="dot"></span><span class="lbl">Exit-Prüfung…</span></span>
-  </div>
+  <nav class="tabs" aria-label="Pages">
+    <a href="#overview" id="tab-overview" class="tab">Overview</a>
+    <a href="#setup" id="tab-setup" class="tab">Setup</a>
+  </nav>
 </header>
 
 <main>
   <section class="alert" id="alert" hidden></section>
 
-  <section class="tiles">
-    <div class="tile">
-      <div class="k">Live empfangen</div>
-      <div class="v" id="live-read">–</div>
-      <div class="s"><span class="key key-read"></span>Durchschnitt 10 s</div>
-    </div>
-    <div class="tile">
-      <div class="k">Live gesendet</div>
-      <div class="v" id="live-written">–</div>
-      <div class="s"><span class="key key-written"></span>Durchschnitt 10 s</div>
-    </div>
-    <div class="tile">
-      <div class="k">Heute (UTC)</div>
-      <div class="v" id="t-today">–</div>
-      <div class="s" id="t-today-s">–</div>
-    </div>
-    <div class="tile">
-      <div class="k">Dieser Monat</div>
-      <div class="v" id="t-month">–</div>
-      <div class="s" id="t-month-s">–</div>
-    </div>
-    <div class="tile">
-      <div class="k">Gesamt</div>
-      <div class="v" id="t-total">–</div>
-      <div class="s" id="t-total-s">–</div>
-    </div>
-    <div class="tile">
-      <div class="k">Verbindungen</div>
-      <div class="v" id="c-total">–</div>
-      <div class="s" id="c-split">–</div>
-    </div>
-  </section>
-
-  <section class="card">
-    <div class="card-head">
-      <h2>Live-Traffic <span class="muted">· letzte 10 Minuten</span></h2>
-      <div class="legend">
-        <span><span class="key key-read"></span>Empfangen</span>
-        <span><span class="key key-written"></span>Gesendet</span>
+  <!-- ============================ Overview ============================ -->
+  <div id="page-overview">
+    <section class="tiles">
+      <div class="tile">
+        <div class="k">Receiving now</div>
+        <div class="v" id="live-read">–</div>
+        <div class="s"><span class="key key-read"></span>10 s average</div>
       </div>
-    </div>
-    <div class="chart" id="chart-live"></div>
-  </section>
-
-  <section class="card">
-    <div class="card-head">
-      <h2>Traffic <span class="muted">· letzte 24 Stunden (Minutenmittel)</span></h2>
-      <div class="legend">
-        <span><span class="key key-read"></span>Empfangen</span>
-        <span><span class="key key-written"></span>Gesendet</span>
+      <div class="tile">
+        <div class="k">Sending now</div>
+        <div class="v" id="live-written">–</div>
+        <div class="s"><span class="key key-written"></span>10 s average</div>
       </div>
-    </div>
-    <div class="chart" id="chart-day"></div>
-  </section>
-
-  <section class="card">
-    <div class="card-head">
-      <h2>Traffic pro Tag <span class="muted">· letzte 30 Tage (UTC)</span></h2>
-      <div class="legend">
-        <span><span class="key key-read"></span>Empfangen</span>
-        <span><span class="key key-written"></span>Gesendet</span>
+      <div class="tile">
+        <div class="k">Today (UTC)</div>
+        <div class="v" id="t-today">–</div>
+        <div class="s" id="t-today-s">–</div>
       </div>
-    </div>
-    <div class="chart" id="chart-days"></div>
-    <details>
-      <summary>Als Tabelle anzeigen</summary>
-      <table class="kv" id="days-table"><thead><tr><th>Tag</th><th>Empfangen</th><th>Gesendet</th></tr></thead><tbody></tbody></table>
-    </details>
-  </section>
-
-  <div class="grid2">
-    <section class="card">
-      <h2>Relay</h2>
-      <table class="kv" id="relay-table"><tbody></tbody></table>
+      <div class="tile">
+        <div class="k">This month</div>
+        <div class="v" id="t-month">–</div>
+        <div class="s" id="t-month-s">–</div>
+      </div>
+      <div class="tile">
+        <div class="k">All time</div>
+        <div class="v" id="t-total">–</div>
+        <div class="s" id="t-total-s">–</div>
+      </div>
+      <div class="tile">
+        <div class="k">Connections</div>
+        <div class="v" id="c-total">–</div>
+        <div class="s" id="c-split">–</div>
+      </div>
     </section>
+
     <section class="card">
-      <h2>Verbindungen</h2>
-      <table class="kv" id="conn-table"><tbody></tbody></table>
-      <p class="note">Nur Anzahlen – Adressen anderer Relays oder Clients werden bewusst nicht angezeigt.</p>
+      <div class="card-head">
+        <h2>Live traffic <span class="muted">· last 10 minutes, 1 s resolution</span></h2>
+        <div class="legend">
+          <span><span class="key key-read"></span>Received</span>
+          <span><span class="key key-written"></span>Sent</span>
+        </div>
+      </div>
+      <div class="chart" id="chart-live"></div>
+      <div class="selection" id="sel-live" hidden></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Traffic history <span class="muted" id="history-sub">· 1 min averages</span></h2>
+        <div class="seg" role="group" aria-label="Time range" id="history-range">
+          <button type="button" data-range="24h" aria-pressed="true">24 h</button>
+          <button type="button" data-range="7d" aria-pressed="false">7 d</button>
+          <button type="button" data-range="30d" aria-pressed="false">30 d</button>
+          <button type="button" data-range="90d" aria-pressed="false">90 d</button>
+        </div>
+      </div>
+      <div class="legend legend-row">
+        <span><span class="key key-read"></span>Received</span>
+        <span><span class="key key-written"></span>Sent</span>
+      </div>
+      <div class="chart" id="chart-history"></div>
+      <div class="selection" id="sel-history" hidden></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Traffic per day <span class="muted">· last 30 days (UTC)</span></h2>
+        <div class="legend">
+          <span><span class="key key-read"></span>Received</span>
+          <span><span class="key key-written"></span>Sent</span>
+        </div>
+      </div>
+      <div class="chart" id="chart-days"></div>
+      <div class="selection" id="sel-days" hidden></div>
+      <details>
+        <summary>Show as table</summary>
+        <table class="kv" id="days-table"><thead><tr><th>Day</th><th>Received</th><th>Sent</th></tr></thead><tbody></tbody></table>
+      </details>
+    </section>
+    <p class="hint">Charts: drag across a chart to select a time range and see its totals.
+      Zoom in with the button below the selection, with Ctrl + mouse wheel or a trackpad pinch;
+      double-click resets the zoom.</p>
+
+    <div class="grid2">
+      <section class="card">
+        <h2>Relay</h2>
+        <table class="kv" id="relay-table"><tbody></tbody></table>
+      </section>
+      <section class="card">
+        <h2>Connections</h2>
+        <table class="kv" id="conn-table"><tbody></tbody></table>
+        <p class="note">Counts only – addresses of other relays or clients are never shown.</p>
+      </section>
+    </div>
+
+    <section class="card">
+      <h2>Running configuration <span class="muted">· as reported by Tor</span></h2>
+      <table class="kv" id="settings-table"><tbody></tbody></table>
     </section>
   </div>
 
-  <section class="card">
-    <h2>Einstellungen <span class="muted">· von Tor gemeldet (nur lesend)</span></h2>
-    <table class="kv" id="settings-table"><tbody></tbody></table>
-  </section>
+  <!-- ============================== Setup ============================== -->
+  <div id="page-setup" hidden>
+    <section class="banner" id="setup-readonly" hidden>
+      <strong>Read-only.</strong> Changes are disabled because no dashboard password is set.
+      Set <code>DASHBOARD_PASSWORD</code> in your <code>.env</code> and recreate the container
+      (<code>docker compose up -d</code>) to edit settings here.
+    </section>
+    <section class="banner bad" id="setup-rejected" hidden></section>
+    <section class="banner warn" id="setup-pending" hidden>
+      <span>Saved changes take effect after Tor restarts.</span>
+      <button type="button" class="btn primary" id="btn-restart-pending">Restart Tor now</button>
+    </section>
+
+    <form id="setup-form" novalidate>
+      <div id="setup-fields"></div>
+
+      <section class="card">
+        <h2>Exit &amp; safety <span class="muted">· locked</span></h2>
+        <p class="note top">These settings cannot be changed. This image only ever runs as a middle
+          relay: Tor will not start unless it confirms them, and the dashboard stops Tor if they
+          ever change.</p>
+        <table class="kv locked">
+          <tbody>
+            <tr><th>Exit relay</th><td>ExitRelay 0</td></tr>
+            <tr><th>Exit policy</th><td>ExitPolicy reject *:*</td></tr>
+            <tr><th>IPv6 exit</th><td>IPv6Exit 0</td></tr>
+            <tr><th>Bridge</th><td>BridgeRelay 0</td></tr>
+            <tr><th>SOCKS proxy</th><td>SocksPort 0</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <div class="actions" id="setup-actions">
+        <span class="status" id="setup-status" role="status"></span>
+        <button type="button" class="btn" id="btn-discard">Discard changes</button>
+        <button type="submit" class="btn" id="btn-save">Save</button>
+        <button type="button" class="btn primary" id="btn-save-restart">Save &amp; restart Tor</button>
+      </div>
+    </form>
+
+    <section class="card">
+      <h2>Control</h2>
+      <div class="control-row">
+        <div>
+          <strong>Restart Tor</strong>
+          <p class="note">Tor shuts down gracefully (up to 30 s) and Docker starts the container
+            again – this needs <code>restart: unless-stopped</code>, as in the provided compose
+            files. The relay keeps its identity and reputation.</p>
+        </div>
+        <button type="button" class="btn" id="btn-restart">Restart Tor</button>
+      </div>
+      <div class="control-row">
+        <div>
+          <strong>Not editable here</strong>
+          <p class="note">ORPort (<span id="setup-orport">–</span>), sandbox and dashboard options come
+            from <code>.env</code> only, because they also need matching changes outside the container.</p>
+        </div>
+      </div>
+    </section>
+  </div>
 
   <footer class="foot" id="footer">–</footer>
 </main>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="overlay-box" role="alertdialog" aria-live="assertive">
+    <div class="spinner" aria-hidden="true"></div>
+    <h2 id="overlay-title">Restarting Tor…</h2>
+    <p id="overlay-text">Tor is shutting down gracefully. Docker will start it again in a moment.</p>
+    <button type="button" class="btn" id="overlay-close" hidden>Close</button>
+  </div>
+</div>
 
 <div class="tooltip" id="tooltip" hidden></div>
 <script src="app.js"></script>

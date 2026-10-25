@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""Small read-only dashboard for the Tor middle relay.
+"""Small dashboard for the Tor middle relay.
 
 Talks to Tor through the local control socket and serves a single page
 plus a JSON API. Standard library only.
 
 Security model:
-  * Read-only. The control client only ever sends the commands in
-    ALLOWED_COMMANDS. It never changes Tor's configuration.
+  * Never changes Tor's running configuration. The control client only
+    sends the commands in ALLOWED_COMMANDS (no SETCONF, no SAVECONF).
+  * The setup page stores a few safe settings in settings.json. They take
+    effect when Tor restarts, and the entrypoint validates them exactly
+    like environment variables - including the "no exit" safety check.
+    Exit-related settings are not editable at all.
+  * Changes require DASHBOARD_PASSWORD (basic auth), a CSRF token and a
+    same-origin request.
   * Exit guard: if Tor ever reports an exit policy that accepts anything,
     or ExitRelay != 0, the dashboard halts Tor immediately.
   * No peer IP addresses or fingerprints are shown - only counts.
-  * Optional HTTP basic auth (DASHBOARD_PASSWORD); publish the port on
-    127.0.0.1 only.
 """
 
 import base64
@@ -19,6 +23,8 @@ import binascii
 import hmac
 import json
 import os
+import re
+import secrets
 import signal
 import socket
 import sys
@@ -37,12 +43,15 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 LIVE_SECONDS = 600          # 10 minutes of 1-second samples
 MINUTE_POINTS = 24 * 60     # 24 hours of 1-minute averages
+HOURS_KEPT = 90 * 24        # 90 days of 1-hour buckets
 DAYS_KEPT = 90
 POLL_INTERVAL = 5
 SAVE_INTERVAL = 60
 
+# SIGNAL SHUTDOWN = graceful restart requested on the setup page (Docker's
+# restart policy brings the container back up); SIGNAL HALT = exit guard.
 ALLOWED_COMMANDS = ("PROTOCOLINFO", "AUTHENTICATE", "GETINFO", "GETCONF",
-                    "SETEVENTS BW", "SIGNAL HALT")
+                    "SETEVENTS BW", "SIGNAL SHUTDOWN", "SIGNAL HALT")
 
 SETTINGS_KEYS = [
     "Nickname", "ContactInfo", "ORPort", "Address", "DirCache",
@@ -168,6 +177,7 @@ class Stats:
         self.live = deque(maxlen=LIVE_SECONDS)       # (ts, read, written)
         self.minutes = deque(maxlen=MINUTE_POINTS)   # (ts, avg_read, avg_written)
         self._minute = None                          # [minute_ts, read, written, n]
+        self.hours = {}                              # hour_ts -> [read, written, seconds]
         self.days = {}                               # "YYYY-MM-DD" -> [read, written]
         self.total = [0, 0]
         self.first_seen = time.time()
@@ -187,6 +197,16 @@ class Stats:
             self.total = [int(x) for x in data.get("total", [0, 0])]
             self.first_seen = float(data.get("first_seen", self.first_seen))
             self.minutes.extend(tuple(m) for m in data.get("minutes", []))
+            if "hours" in data:
+                self.hours = {int(h[0]): [int(h[1]), int(h[2]), int(h[3])] for h in data["hours"]}
+            else:
+                # Statistics from an older version: derive hourly buckets
+                # from the per-minute averages that are still available.
+                for m, r, w in self.minutes:
+                    b = self.hours.setdefault(int(m // 3600 * 3600), [0, 0, 0])
+                    b[0] += r * 60
+                    b[1] += w * 60
+                    b[2] += 60
             log(f"loaded statistics from {self.path}")
         except FileNotFoundError:
             pass
@@ -200,6 +220,7 @@ class Stats:
             data = {
                 "days": self.days, "total": self.total,
                 "first_seen": self.first_seen, "minutes": list(self.minutes),
+                "hours": [[k, *v] for k, v in sorted(self.hours.items())],
             }
             self.dirty = False
         tmp = self.path + ".tmp"
@@ -231,6 +252,15 @@ class Stats:
             self._minute[1] += read
             self._minute[2] += written
             self._minute[3] += 1
+            hour = int(now // 3600 * 3600)
+            if hour not in self.hours:
+                cutoff = hour - HOURS_KEPT * 3600
+                for k in [k for k in self.hours if k <= cutoff]:
+                    del self.hours[k]
+            h = self.hours.setdefault(hour, [0, 0, 0])
+            h[0] += read
+            h[1] += written
+            h[2] += 1
             if len(self.days) > DAYS_KEPT:
                 for k in sorted(self.days)[:-DAYS_KEPT]:
                     del self.days[k]
@@ -259,8 +289,15 @@ class Stats:
             return [s for s in self.live if s[0] > since]
 
     def minute_series(self):
+        """1-minute average rates (bytes/s) for the last 24 hours."""
         with self.lock:
             return list(self.minutes)
+
+    def hour_series(self, since):
+        """1-hour average rates (bytes/s) plus seconds covered."""
+        with self.lock:
+            return [(k, v[0] // max(v[2], 1), v[1] // max(v[2], 1), v[2])
+                    for k, v in sorted(self.hours.items()) if k >= since]
 
 
 STATS = Stats()
@@ -439,6 +476,201 @@ def poll_loop():
 
 
 # ---------------------------------------------------------------------
+# Settings (setup page)
+#
+# Only these keys can be changed from the dashboard. They are stored in
+# settings.json and applied by entrypoint.sh on the next Tor start, which
+# validates them again with the same rules as environment variables.
+# ORPort, Sandbox, dashboard options and everything exit-related are
+# deliberately not editable.
+# ---------------------------------------------------------------------
+SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
+
+BYTE_UNITS = ("bytes", "KBytes", "MBytes", "GBytes", "TBytes")
+RATE_UNITS = BYTE_UNITS + ("KBits", "MBits", "GBits", "TBits")
+
+
+def _size_validator(units):
+    def check(value):
+        m = re.fullmatch(r"([0-9]{1,9}) ?([A-Za-z]+)", value)
+        if not m:
+            return f"use a number and a unit, e.g. '5 {units[2]}'"
+        unit = next((u for u in units if u.lower() == m.group(2).lower()), None)
+        if not unit:
+            return "unit must be one of " + ", ".join(units)
+        if int(m.group(1)) == 0:
+            return "must be greater than 0 (leave empty for no limit)"
+        return None
+    return check
+
+
+def _regex_validator(pattern, message):
+    return lambda v: None if re.fullmatch(pattern, v) else message
+
+
+def _contact_validator(value):
+    if len(value) > 500:
+        return "at most 500 characters"
+    if value.startswith("%"):
+        return "must not start with '%'"
+    return None
+
+
+def _family_validator(value):
+    if re.fullmatch(r"\$?[0-9A-Fa-f]{40}(,\$?[0-9A-Fa-f]{40})*", value):
+        return None
+    return "comma-separated 40-character hex fingerprints"
+
+
+# key -> (validator, required, normalizer)
+EDITABLE = {
+    "NICKNAME": (_regex_validator(r"[A-Za-z0-9]{1,19}", "1-19 letters/digits"), True, None),
+    "CONTACT_INFO": (_contact_validator, False, None),
+    "RELAY_ADDRESS": (_regex_validator(r"[A-Za-z0-9.:-]{1,253}|\[[0-9A-Fa-f:.]+\]",
+                                       "IP address or hostname"), False, None),
+    "OR_IPV6": (_regex_validator(r"auto|0|1", "auto, 0 or 1"), True, None),
+    "DIR_CACHE": (_regex_validator(r"[01]", "0 or 1"), True, None),
+    "MYFAMILY": (_family_validator, False, lambda v: re.sub(r"[\s,]+", ",", v).strip(",")),
+    "BANDWIDTH_RATE": (_size_validator(RATE_UNITS), False, None),
+    "BANDWIDTH_BURST": (_size_validator(RATE_UNITS), False, None),
+    "MAX_ADVERTISED_BANDWIDTH": (_size_validator(RATE_UNITS), False, None),
+    "ACCOUNTING_MAX": (_size_validator(BYTE_UNITS), False, None),
+    "ACCOUNTING_START": (_regex_validator(r"(day|week|month)( [0-9]{1,2})?( [0-9]{1,2}:[0-9]{2})?",
+                                          "e.g. 'month 1 00:00'"), True, None),
+}
+ENV_DEFAULTS = {"OR_IPV6": "auto", "DIR_CACHE": "1", "ACCOUNTING_START": "month 1 00:00"}
+
+
+def env_value(key):
+    """Value from the container environment (.env), before any override."""
+    return os.environ.get("ENV_" + key, os.environ.get(key, ENV_DEFAULTS.get(key, "")))
+
+
+def applied_value(key):
+    """Value the entrypoint actually used when Tor was started."""
+    return os.environ.get("EFF_" + key, env_value(key))
+
+
+def load_overrides():
+    try:
+        with open(SETTINGS_FILE) as f:
+            data = json.load(f)
+        values = data.get("values", {})
+        return {k: str(v) for k, v in values.items() if k in EDITABLE}
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError, AttributeError) as e:
+        log(f"cannot read {SETTINGS_FILE}: {e}")
+        return {}
+
+
+def save_overrides(values):
+    tmp = SETTINGS_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"version": 1, "updated": time.time(), "values": values}, f, indent=1)
+    os.replace(tmp, SETTINGS_FILE)
+
+
+def validate_changes(changes):
+    """changes: {KEY: str | None}; None = reset to .env value.
+
+    Returns (clean_changes, errors)."""
+    clean, errors = {}, {}
+    if not isinstance(changes, dict):
+        return {}, {"_": "invalid request"}
+    for key, value in changes.items():
+        if key not in EDITABLE:
+            errors[key] = "this setting cannot be changed from the dashboard"
+            continue
+        if value is None:
+            clean[key] = None
+            continue
+        if not isinstance(value, str):
+            errors[key] = "must be a string"
+            continue
+        validator, required, normalize = EDITABLE[key]
+        value = value.strip()
+        if normalize:
+            value = normalize(value)
+        if any(ord(c) < 32 or ord(c) == 127 for c in value):
+            errors[key] = "must not contain line breaks or control characters"
+            continue
+        if not value:
+            if required:
+                errors[key] = "required"
+            else:
+                clean[key] = ""
+            continue
+        problem = validator(value)
+        if problem:
+            errors[key] = problem
+        else:
+            clean[key] = value
+    if not errors:
+        # Cross-field rule Tor enforces at start: burst >= rate.
+        overrides = load_overrides()
+
+        def final(key):
+            if key in clean:
+                return env_value(key) if clean[key] is None else clean[key]
+            return overrides.get(key, env_value(key))
+        rate, burst = size_in_bytes(final("BANDWIDTH_RATE")), size_in_bytes(final("BANDWIDTH_BURST"))
+        if rate and burst and burst < rate:
+            errors["BANDWIDTH_BURST"] = "must be at least the sustained rate"
+    return clean, errors
+
+
+def size_in_bytes(value):
+    """'5 MBytes' -> bytes (bits are converted); None if empty/unknown."""
+    m = re.fullmatch(r"\s*([0-9]+) ?([A-Za-z]+)\s*", value or "")
+    if not m:
+        return None
+    unit = m.group(2).lower()
+    powers = {"": 0, "k": 1, "m": 2, "g": 3, "t": 4}
+    for suffix, divisor in (("bytes", 1), ("bits", 8)):
+        if unit.endswith(suffix) and unit[:-len(suffix)] in powers:
+            # Tor uses binary prefixes (1 KByte = 1024 bytes).
+            return int(m.group(1)) * 1024 ** powers[unit[:-len(suffix)]] / divisor
+    return None
+
+
+def settings_view():
+    overrides = load_overrides()
+    fields = {}
+    for key in EDITABLE:
+        saved = overrides.get(key, env_value(key))
+        fields[key] = {
+            "value": saved,
+            "source": "dashboard" if key in overrides else "env",
+            "env": env_value(key),
+            "applied": applied_value(key),
+            "pending": saved != applied_value(key),
+        }
+    return {
+        "editable": bool(PASSWORD),
+        "fields": fields,
+        "overrides_status": os.environ.get("OVERRIDES_STATUS", "none"),
+        "overrides_message": os.environ.get("OVERRIDES_MESSAGE", ""),
+        "or_port": OR_PORT,
+        "units": {"rate": RATE_UNITS, "bytes": BYTE_UNITS},
+    }
+
+
+def request_restart():
+    """Graceful Tor shutdown; Docker's restart policy starts it again."""
+    ctl = connect()
+    try:
+        ctl.command("SIGNAL SHUTDOWN")
+    finally:
+        ctl.close()
+    log("restart requested from the setup page (graceful shutdown)")
+
+
+CSRF_TOKEN = secrets.token_urlsafe(32)
+WRITE_LOCK = threading.Lock()
+
+
+# ---------------------------------------------------------------------
 # HTTP
 # ---------------------------------------------------------------------
 STATIC_FILES = {
@@ -515,15 +747,104 @@ class Handler(BaseHTTPRequestHandler):
                     since = 0
             return self._json({"now": int(time.time()), "live": STATS.live_series(since)})
         if path == "/api/history":
-            return self._json({"minutes": STATS.minute_series()})
+            rng = self._query().get("range", "24h")
+            if rng == "24h":
+                return self._json({"range": rng, "res": 60, "points": STATS.minute_series()})
+            days = {"7d": 7, "30d": 30, "90d": 90}.get(rng)
+            if not days:
+                return self._send(400, b"unknown range\n", "text/plain")
+            since = int(time.time() // 3600 * 3600) - days * 86400
+            return self._json({"range": rng, "res": 3600,
+                               "points": [p[:3] for p in STATS.hour_series(since)]})
+        if path == "/api/settings":
+            view = settings_view()
+            view["csrf"] = CSRF_TOKEN
+            return self._json(view)
         return self._send(404, b"not found\n", "text/plain")
 
     do_HEAD = do_GET
 
-    def _method_not_allowed(self):
-        self._send(405, b"read-only\n", "text/plain", {"Allow": "GET, HEAD"})
+    def _query(self):
+        from urllib.parse import parse_qs, urlsplit
+        return {k: v[-1] for k, v in parse_qs(urlsplit(self.path).query).items()}
 
-    do_POST = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _method_not_allowed
+    def _error(self, code, message, extra=None):
+        body = json.dumps({"error": message, **(extra or {})}).encode()
+        self._send(code, body, "application/json")
+
+    def do_POST(self):
+        path = self.path.split("?", 1)[0]
+        if path not in ("/api/settings", "/api/control"):
+            return self._error(404, "not found")
+        # Changes are only possible with a password. Without one the
+        # dashboard stays read-only.
+        if not PASSWORD:
+            return self._error(403, "Set DASHBOARD_PASSWORD to enable changes from the dashboard.")
+        if not self._authorized():
+            time.sleep(1)   # slow down password guessing
+            return self._send(401, b"authentication required\n", "text/plain",
+                              {"WWW-Authenticate": 'Basic realm="tor-relay", charset="UTF-8"'})
+        # CSRF: a custom header with a token only same-origin scripts can
+        # read, a JSON content type, and a matching Origin if one is sent.
+        token = self.headers.get("X-CSRF-Token", "")
+        if not hmac.compare_digest(token.encode(), CSRF_TOKEN.encode()):
+            return self._error(403, "invalid or missing CSRF token - reload the page")
+        origin = self.headers.get("Origin")
+        host = self.headers.get("Host", "")
+        if origin and origin.split("://", 1)[-1] != host:
+            return self._error(403, "cross-origin request rejected")
+        if not self.headers.get("Content-Type", "").startswith("application/json"):
+            return self._error(415, "expected application/json")
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = -1
+        if not 0 < length <= 16384:
+            return self._error(413, "request too large or empty")
+        try:
+            body = json.loads(self.rfile.read(length))
+        except ValueError:
+            return self._error(400, "invalid JSON")
+        if not isinstance(body, dict):
+            return self._error(400, "invalid request")
+
+        if path == "/api/control":
+            if body.get("action") != "restart":
+                return self._error(400, "unknown action")
+            try:
+                request_restart()
+            except (OSError, ControlError) as e:
+                return self._error(503, f"could not reach Tor: {e}")
+            return self._json({"ok": True, "restarting": True})
+
+        clean, errors = validate_changes(body.get("values"))
+        if errors:
+            return self._error(400, "validation failed", {"fields": errors})
+        with WRITE_LOCK:
+            overrides = load_overrides()
+            for key, value in clean.items():
+                if value is None or value == env_value(key):
+                    overrides.pop(key, None)    # back to the .env value
+                else:
+                    overrides[key] = value
+            try:
+                save_overrides(overrides)
+            except OSError as e:
+                return self._error(500, f"cannot save settings: {e}")
+        log("settings changed on the setup page: " + (", ".join(sorted(clean)) or "none"))
+        restarting = False
+        if body.get("restart"):
+            try:
+                request_restart()
+                restarting = True
+            except (OSError, ControlError) as e:
+                return self._error(503, f"saved, but could not restart Tor: {e}")
+        return self._json({"ok": True, "restarting": restarting, "settings": settings_view()})
+
+    def _method_not_allowed(self):
+        self._send(405, b"method not allowed\n", "text/plain", {"Allow": "GET, HEAD, POST"})
+
+    do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _method_not_allowed
 
 
 class Server(ThreadingHTTPServer):
@@ -560,7 +881,8 @@ def main():
         STATS.save()
         sys.exit(0)
     signal.signal(signal.SIGTERM, stop)
-    log(f"listening on port {PORT}" + (" (basic auth enabled)" if PASSWORD else ""))
+    log(f"listening on port {PORT}" + (" (basic auth enabled, setup page writable)" if PASSWORD
+                                       else " (no password: setup page is read-only)"))
     try:
         server.serve_forever()
     finally:
