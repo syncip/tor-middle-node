@@ -1,4 +1,9 @@
-FROM debian:bookworm-slim
+# Debian release for the base image AND the Tor Project repository.
+# Both must match. trixie is the current Debian stable (bookworm left
+# regular security support in June 2026).
+ARG DEBIAN_SUITE=trixie
+FROM debian:${DEBIAN_SUITE}-slim
+ARG DEBIAN_SUITE
 
 LABEL org.opencontainers.image.title="tor-middle-relay" \
       org.opencontainers.image.description="Minimal, hardened Tor middle relay (no exit, no bridge) with a small read-only dashboard" \
@@ -7,13 +12,11 @@ LABEL org.opencontainers.image.title="tor-middle-relay" \
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# --- Base tools ------------------------------------------------------
+# --- Runtime tools -----------------------------------------------------
 # python3 runs the dashboard (standard library only, no pip packages).
 RUN set -eux; \
     apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
-        curl \
-        gnupg2 \
         gettext-base \
         gosu \
         procps \
@@ -22,15 +25,23 @@ RUN set -eux; \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Official Tor Project apt repository (signed packages) -----------
+# curl and gnupg are only needed to fetch and check the signing key; they
+# are removed again in the same layer, so they don't ship in the image.
+ARG TOR_KEY_FPR=A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89
 RUN set -eux; \
-    curl -fsSL https://deb.torproject.org/torproject.org/A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89.asc \
-        | gpg --dearmor -o /usr/share/keyrings/deb.torproject.org-keyring.gpg; \
-    echo "deb [signed-by=/usr/share/keyrings/deb.torproject.org-keyring.gpg] https://deb.torproject.org/torproject.org bookworm main" \
+    apt-get update; \
+    apt-get install -y --no-install-recommends curl gnupg; \
+    curl -fsSL -o /tmp/tor.asc "https://deb.torproject.org/torproject.org/${TOR_KEY_FPR}.asc"; \
+    gpg --show-keys --with-colons /tmp/tor.asc | grep -q "^fpr:*${TOR_KEY_FPR}:"; \
+    gpg --dearmor -o /usr/share/keyrings/deb.torproject.org-keyring.gpg /tmp/tor.asc; \
+    rm -f /tmp/tor.asc; \
+    echo "deb [signed-by=/usr/share/keyrings/deb.torproject.org-keyring.gpg] https://deb.torproject.org/torproject.org ${DEBIAN_SUITE} main" \
         > /etc/apt/sources.list.d/tor.list; \
-    apt-get update && apt-get install -y --no-install-recommends \
-        tor \
-        deb.torproject.org-keyring \
-    && rm -rf /var/lib/apt/lists/*; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends tor deb.torproject.org-keyring; \
+    apt-mark auto curl gnupg >/dev/null; \
+    apt-get autoremove -y --purge; \
+    rm -rf /var/lib/apt/lists/* /root/.gnupg; \
     tor --version | head -1 > /etc/tor-version
 
 # Record the installed Tor version so it can be inspected without starting
